@@ -4,12 +4,6 @@
 Step by step installation
 =========================
 
-.. contents::
-   :depth: 2
-   :local:
-   :backlinks: entry
-
-
 In this section we show the setup of a SearXNG instance that will be installed
 by the :ref:`installation scripts`.
 
@@ -86,7 +80,6 @@ below. This setup:
 
 - enables :ref:`limiter <limiter>` to protect against bots
 - enables :ref:`image proxy <image_proxy>` for better privacy
-- enables :ref:`cache busting <static_use_hash>` to save bandwidth
 
 Modify the ``/etc/searxng/settings.yml`` to your needs:
 
@@ -96,7 +89,7 @@ Modify the ``/etc/searxng/settings.yml`` to your needs:
 
      .. literalinclude:: ../../utils/templates/etc/searxng/settings.yml
         :language: yaml
-        :end-before: # hostnames:
+        :end-before: # preferences:
 
      To see the entire file jump to :origin:`utils/templates/etc/searxng/settings.yml`
 
@@ -129,4 +122,3 @@ configuration file.
 If everything works fine, hit ``[CTRL-C]`` to stop the *webapp* and disable the
 debug option in ``settings.yml``. You can now exit SearXNG user bash session (enter exit
 command twice).  At this point SearXNG is not demonized; uwsgi allows this.
-

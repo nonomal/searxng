@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pylint: disable=missing-module-docstring
 
-import typing
 import math
 import contextlib
 from timeit import default_timer
-from operator import itemgetter
 
 from searx.engines import engines
+from searx.openmetrics import OpenMetricsFamily
 from .models import HistogramStorage, CounterStorage, VoidHistogram, VoidCounterStorage
 from .error_recorder import count_error, count_exception, errors_per_engines
 
@@ -29,8 +28,8 @@ __all__ = [
 ENDPOINTS = {'search'}
 
 
-histogram_storage: typing.Optional[HistogramStorage] = None
-counter_storage: typing.Optional[CounterStorage] = None
+histogram_storage: HistogramStorage = None  # type: ignore
+counter_storage: CounterStorage = None  # type: ignore
 
 
 @contextlib.contextmanager
@@ -56,11 +55,11 @@ def histogram(*args, raise_on_not_found=True):
     return h
 
 
-def counter_inc(*args):
+def counter_inc(*args: str):
     counter_storage.add(1, *args)
 
 
-def counter_add(value, *args):
+def counter_add(value: int, *args: str):
     counter_storage.add(value, *args)
 
 
@@ -68,7 +67,7 @@ def counter(*args):
     return counter_storage.get(*args)
 
 
-def initialize(engine_names=None, enabled=True):
+def initialize(engine_names: list[str] | None = None, enabled: bool = True) -> None:
     """
     Initialize metrics
     """
@@ -140,37 +139,31 @@ def get_engine_errors(engline_name_list):
     return result
 
 
-def get_reliabilities(engline_name_list, checker_results):
+def get_reliabilities(engline_name_list):
     reliabilities = {}
 
     engine_errors = get_engine_errors(engline_name_list)
 
     for engine_name in engline_name_list:
-        checker_result = checker_results.get(engine_name, {})
-        checker_success = checker_result.get('success', True)
         errors = engine_errors.get(engine_name) or []
-        if counter('engine', engine_name, 'search', 'count', 'sent') == 0:
+        sent_count = counter('engine', engine_name, 'search', 'count', 'sent')
+
+        if sent_count == 0:
             # no request
             reliability = None
-        elif checker_success and not errors:
-            reliability = 100
-        elif 'simple' in checker_result.get('errors', {}):
-            # the basic (simple) test doesn't work: the engine is broken according to the checker
-            # even if there is no exception
-            reliability = 0
         else:
             # pylint: disable=consider-using-generator
             reliability = 100 - sum([error['percentage'] for error in errors if not error.get('secondary')])
 
         reliabilities[engine_name] = {
             'reliability': reliability,
+            'sent_count': sent_count,
             'errors': errors,
-            'checker': checker_results.get(engine_name, {}).get('errors', {}),
         }
     return reliabilities
 
 
-def get_engines_stats(engine_name_list):
+def get_engines_stats(engine_name_list: list[str]):
     assert counter_storage is not None
     assert histogram_storage is not None
 
@@ -245,3 +238,57 @@ def get_engines_stats(engine_name_list):
         'max_time': math.ceil(max_time_total or 0),
         'max_result_count': math.ceil(max_result_count or 0),
     }
+
+
+def openmetrics(engine_stats, engine_reliabilities):
+    metrics = [
+        OpenMetricsFamily(
+            key="searxng_engines_response_time_total_seconds",
+            type_hint="gauge",
+            help_hint="The average total response time of the engine",
+            data_info=[{'engine_name': engine['name']} for engine in engine_stats['time']],
+            data=[engine['total'] or 0 for engine in engine_stats['time']],
+        ),
+        OpenMetricsFamily(
+            key="searxng_engines_response_time_processing_seconds",
+            type_hint="gauge",
+            help_hint="The average processing response time of the engine",
+            data_info=[{'engine_name': engine['name']} for engine in engine_stats['time']],
+            data=[engine['processing'] or 0 for engine in engine_stats['time']],
+        ),
+        OpenMetricsFamily(
+            key="searxng_engines_response_time_http_seconds",
+            type_hint="gauge",
+            help_hint="The average HTTP response time of the engine",
+            data_info=[{'engine_name': engine['name']} for engine in engine_stats['time']],
+            data=[engine['http'] or 0 for engine in engine_stats['time']],
+        ),
+        OpenMetricsFamily(
+            key="searxng_engines_result_count_total",
+            type_hint="counter",
+            help_hint="The total amount of results returned by the engine",
+            data_info=[{'engine_name': engine['name']} for engine in engine_stats['time']],
+            data=[engine['result_count'] or 0 for engine in engine_stats['time']],
+        ),
+        OpenMetricsFamily(
+            key="searxng_engines_request_count_total",
+            type_hint="counter",
+            help_hint="The total amount of user requests made to this engine",
+            data_info=[{'engine_name': engine['name']} for engine in engine_stats['time']],
+            data=[
+                engine_reliabilities.get(engine['name'], {}).get('sent_count', 0) or 0
+                for engine in engine_stats['time']
+            ],
+        ),
+        OpenMetricsFamily(
+            key="searxng_engines_reliability_total",
+            type_hint="counter",
+            help_hint="The overall reliability of the engine",
+            data_info=[{'engine_name': engine['name']} for engine in engine_stats['time']],
+            data=[
+                engine_reliabilities.get(engine['name'], {}).get('reliability', 0) or 0
+                for engine in engine_stats['time']
+            ],
+        ),
+    ]
+    return "".join([str(metric) for metric in metrics])

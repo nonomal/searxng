@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unsplash
-
-"""
+"""Unsplash"""
 
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 from json import loads
+
+from searx.utils import searxng_useragent
 
 # about
 about = {
@@ -18,14 +18,14 @@ about = {
 
 base_url = 'https://unsplash.com/'
 search_url = base_url + 'napi/search/photos?'
-categories = ['images']
+categories = ["stock images"]
 page_size = 20
 paging = True
 
 
 def clean_url(url):
     parsed = urlparse(url)
-    query = [(k, v) for (k, v) in parse_qsl(parsed.query) if k not in ['ixid', 's']]
+    query = [(k, v) for (k, v) in parse_qsl(parsed.query) if k != 'ixid']
 
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment))
 
@@ -33,6 +33,13 @@ def clean_url(url):
 def request(query, params):
     params['url'] = search_url + urlencode({'query': query, 'page': params['pageno'], 'per_page': page_size})
     logger.debug("query_url --> %s", params['url'])
+
+    # common user agents (e.g. Firefox, Chrome) are blocked
+    # by Anubis (https://anubis.techaro.lol/)
+    # so we pass the searxng user agent instead, which is not
+    # commonly used by crawlers and hence not blocked
+    params["headers"]["User-Agent"] = searxng_useragent()
+
     return params
 
 
@@ -47,7 +54,7 @@ def response(resp):
                     'template': 'images.html',
                     'url': clean_url(result['links']['html']),
                     'thumbnail_src': clean_url(result['urls']['thumb']),
-                    'img_src': clean_url(result['urls']['raw']),
+                    'img_src': clean_url(result['urls']['regular']),
                     'title': result.get('alt_description') or 'unknown',
                     'content': result.get('description') or '',
                 }

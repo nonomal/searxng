@@ -19,11 +19,6 @@ Makefiles, we recommend to read gnu-make_ introduction.
    To install developer requirements follow :ref:`buildhosts`.
 
 
-.. contents::
-   :depth: 2
-   :local:
-   :backlinks: entry
-
 The usage is simple, just type ``make {target-name}`` to *build* a target.
 Calling the ``help`` target gives a first overview (``make help``):
 
@@ -61,7 +56,7 @@ working tree and release a ``make install`` to get a virtualenv with a
    $ make install
    PYENV     [virtualenv] installing ./requirements*.txt into local/py3
    ...
-   PYENV     [install] pip install -e 'searx[test]'
+   PYENV     [install] pip install --use-pep517 --no-build-isolation -e 'searx[test]'
    ...
    Successfully installed searxng-2023.7.19+a446dea1b
 
@@ -78,7 +73,7 @@ the check fails if you edit the requirements listed in
    ...
    PYENV     [virtualenv] installing ./requirements*.txt into local/py3
    ...
-   PYENV     [install] pip install -e 'searx[test]'
+   PYENV     [install] pip install --use-pep517 --no-build-isolation -e 'searx[test]'
    ...
    Successfully installed searxng-2023.7.19+a446dea1b
 
@@ -103,8 +98,8 @@ Node.js environment (``make node.env``)
 
    Node.js_ version {{version.node}} or higher is required to build the themes.
    If the requirement is not met, the build chain uses nvm_ (Node Version
-   Manager) to install latest LTS of Node.js_ locally: there is no need to
-   install nvm_ or npm_ on your system.
+   Manager) to install Node.js_ locally: there is no need to install
+   nvm_ or npm_ on your system.
 
 To install NVM_ and Node.js_ in once you can use :ref:`make nvm.nodejs`.
 
@@ -150,7 +145,7 @@ setup.
 ``make nvm.nodejs``
 -------------------
 
-Install latest Node.js_ LTS locally (uses nvm_)::
+Install latest Node.js_ locally (uses nvm_)::
 
   $ make nvm.nodejs
   INFO:  install (update) NVM at /share/searxng/.nvm
@@ -180,29 +175,30 @@ sources of the theme need to be rebuild.  You can do that by running::
 
   $ make themes.all
 
-Alternatively to ``themes.all`` you can run *live builds* of the theme you are
-modify (:ref:`make themes`)::
+..
+   ToDo: vite server is not implemented yet / will be done in a follow up PR
 
-  $ LIVE_THEME=simple make run
+   Alternatively to ``themes.all`` you can run *live builds* of the theme you are
+   modify (:ref:`make themes`)::
 
-.. _make format.python:
+    $ LIVE_THEME=simple make run
 
-``make format.python``
+.. _make format:
+
+``make format``
 ======================
-
-Format Python source code using `Black code style`_.  See ``$BLACK_OPTIONS``
-and ``$BLACK_TARGETS`` in :origin:`Makefile`.
-
-.. attention::
-
-   We stuck at Black 22.12.0, please read comment in PR `Bump black from 22.12.0
-   to 23.1.0`_
-
-.. _Bump black from 22.12.0 to 23.1.0:
-   https://github.com/searxng/searxng/pull/2159#pullrequestreview-1284094735
 
 .. _Black code style:
    https://black.readthedocs.io/en/stable/the_black_code_style/current_style.html
+.. _shfmt: https://github.com/mvdan/sh?tab=readme-ov-file#shfmt
+.. _EditorConfig: https://github.com/patrickvane/shfmt?tab=readme-ov-file#description
+
+- Format Python source code using `Black code style`_.  See ``$BLACK_OPTIONS``
+  and ``$BLACK_TARGETS`` in :origin:`Makefile`.
+
+- Format Shell scripts using shfmt_. The formatter ``shfmt`` reads the rules
+  from the EditorConfig_ files.
+
 
 .. _make clean:
 
@@ -290,38 +286,6 @@ Pylint_ is known as one of the best source-code, bug and quality checker for the
 Python programming language.  The pylint profile used in the SearXNG project is
 found in project's root folder :origin:`.pylintrc`.
 
-.. _make search.checker:
-
-``make search.checker.{engine name}``
-=====================================
-
-To check all engines::
-
-    make search.checker
-
-To check a engine with whitespace in the name like *google news* replace space
-by underline::
-
-    make search.checker.google_news
-
-To see HTTP requests and more use SEARXNG_DEBUG::
-
-    make SEARXNG_DEBUG=1 search.checker.google_news
-
-.. _3xx: https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#3xx_redirection
-
-To filter out HTTP redirects (3xx_)::
-
-    make SEARXNG_DEBUG=1 search.checker.google_news | grep -A1 "HTTP/1.1\" 3[0-9][0-9]"
-    ...
-    Engine google news                   Checking
-    https://news.google.com:443 "GET /search?q=life&hl=en&lr=lang_en&ie=utf8&oe=utf8&ceid=US%3Aen&gl=US HTTP/1.1" 302 0
-    https://news.google.com:443 "GET /search?q=life&hl=en-US&lr=lang_en&ie=utf8&oe=utf8&ceid=US:en&gl=US HTTP/1.1" 200 None
-    --
-    https://news.google.com:443 "GET /search?q=computer&hl=en&lr=lang_en&ie=utf8&oe=utf8&ceid=US%3Aen&gl=US HTTP/1.1" 302 0
-    https://news.google.com:443 "GET /search?q=computer&hl=en-US&lr=lang_en&ie=utf8&oe=utf8&ceid=US:en&gl=US HTTP/1.1" 200 None
-    --
-
 .. _make themes:
 
 ``make themes.*``
@@ -357,17 +321,6 @@ commit of) the static files.  The ``./manage static.build..*`` command line
 can be used to convenient run common build tasks of the static files.
 
 .. program-output:: bash -c "cd ..; ./manage static.help"
-
-
-.. _manage redis.help:
-
-``./manage redis.help``
-=======================
-
-The ``./manage redis.*`` command line can be used to convenient run common Redis
-tasks (:ref:`Redis developer notes`).
-
-.. program-output:: bash -c "cd ..; ./manage redis.help"
 
 
 .. _manage go.help:

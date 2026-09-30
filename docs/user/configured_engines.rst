@@ -8,7 +8,7 @@ Configured Engines
 
    - :ref:`settings categories_as_tabs`
    - :ref:`engines-dev`
-   - :ref:`settings engine`
+   - :ref:`settings engines`
    - :ref:`general engine configuration`
 
 .. jinja:: searx
@@ -21,11 +21,6 @@ Configured Engines
    <settings categories_as_tabs>`.  In addition to these UI categories (also
    called *tabs*), engines can be queried by their name or the categories they
    belong to, by using a :ref:`\!bing syntax <search-syntax>`.
-
-.. contents::
-   :depth: 2
-   :local:
-   :backlinks: entry
 
 .. jinja:: searx
 
@@ -63,8 +58,8 @@ Configured Engines
       {% for mod in engines %}
 
       * - `{{mod.name}} <{{mod.about and mod.about.website}}>`_
-          {%- if mod.about and  mod.about.language %}
-          ({{mod.about.language | upper}})
+          {%- if mod.language %}
+          ({{mod.language | upper}})
           {%- endif %}
         - ``!{{mod.shortcut}}``
         - {%- if 'searx.engines.' + mod.__name__ in documented_modules %}

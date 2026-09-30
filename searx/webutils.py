@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pylint: disable=missing-module-docstring, invalid-name
 
-from __future__ import annotations
 
 import os
 import pathlib
@@ -9,18 +8,19 @@ import csv
 import hashlib
 import hmac
 import re
-import inspect
 import itertools
 import json
 from datetime import datetime, timedelta
-from typing import Iterable, List, Tuple, Dict, TYPE_CHECKING
+from typing import Iterable, List, Tuple, TYPE_CHECKING
 
 from io import StringIO
 from codecs import getincrementalencoder
 
+import msgspec
 from flask_babel import gettext, format_date  # type: ignore
 
-from searx import logger, settings
+from searx import logger, get_setting
+
 from searx.engines import DEFAULT_CATEGORY
 
 if TYPE_CHECKING:
@@ -42,18 +42,17 @@ exception_classname_to_text = {
     None: gettext('unexpected crash'),
     'timeout': timeout_text,
     'asyncio.TimeoutError': timeout_text,
-    'httpx.TimeoutException': timeout_text,
-    'httpx.ConnectTimeout': timeout_text,
-    'httpx.ReadTimeout': timeout_text,
-    'httpx.WriteTimeout': timeout_text,
-    'httpx.HTTPStatusError': gettext('HTTP error'),
-    'httpx.ConnectError': gettext("HTTP connection error"),
-    'httpx.RemoteProtocolError': http_protocol_error_text,
-    'httpx.LocalProtocolError': http_protocol_error_text,
-    'httpx.ProtocolError': http_protocol_error_text,
-    'httpx.ReadError': network_error_text,
-    'httpx.WriteError': network_error_text,
-    'httpx.ProxyError': gettext("proxy error"),
+    'curl_cffi.requests.exceptions.Timeout': timeout_text,
+    'curl_cffi.requests.exceptions.ConnectTimeout': timeout_text,
+    'curl_cffi.requests.exceptions.ReadTimeout': timeout_text,
+    'curl_cffi.requests.exceptions.HTTPError': gettext('HTTP error'),
+    'curl_cffi.requests.exceptions.ConnectionError': gettext("HTTP connection error"),
+    'curl_cffi.requests.exceptions.DNSError': gettext("HTTP connection error"),
+    'curl_cffi.requests.exceptions.IncompleteRead': http_protocol_error_text,
+    'curl_cffi.requests.exceptions.SSLError': ssl_cert_error_text,
+    'curl_cffi.requests.exceptions.CertificateVerifyError': ssl_cert_error_text,
+    'curl_cffi.requests.exceptions.ProxyError': gettext("proxy error"),
+    'curl_cffi.requests.exceptions.RequestException': network_error_text,
     'searx.exceptions.SearxEngineCaptchaException': gettext("CAPTCHA"),
     'searx.exceptions.SearxEngineTooManyRequestsException': gettext("too many requests"),
     'searx.exceptions.SearxEngineAccessDeniedException': gettext("access denied"),
@@ -67,7 +66,7 @@ exception_classname_to_text = {
 }
 
 
-def get_translated_errors(unresponsive_engines: Iterable[UnresponsiveEngine]):
+def get_translated_errors(unresponsive_engines: "Iterable[UnresponsiveEngine]"):
     translated_errors = []
 
     for unresponsive_engine in unresponsive_engines:
@@ -110,7 +109,7 @@ class CSVWriter:
             self.writerow(row)
 
 
-def write_csv_response(csv: CSVWriter, rc: ResultContainer) -> None:  # pylint: disable=redefined-outer-name
+def write_csv_response(csv: CSVWriter, rc: "ResultContainer") -> None:  # pylint: disable=redefined-outer-name
     """Write rows of the results to a query (``application/csv``) into a CSV
     table (:py:obj:`CSVWriter`).  First line in the table contain the column
     names.  The column "type" specifies the type, the following types are
@@ -123,17 +122,18 @@ def write_csv_response(csv: CSVWriter, rc: ResultContainer) -> None:  # pylint: 
 
     """
 
-    results = rc.get_ordered_results()
     keys = ('title', 'url', 'content', 'host', 'engine', 'score', 'type')
     csv.writerow(keys)
 
-    for row in results:
+    for res in rc.get_ordered_results():
+        row = res.as_dict()
         row['host'] = row['parsed_url'].netloc
         row['type'] = 'result'
         csv.writerow([row.get(key, '') for key in keys])
 
     for a in rc.answers:
-        row = {'title': a, 'type': 'answer'}
+        row = a.as_dict()
+        row['host'] = row['parsed_url'].netloc
         csv.writerow([row.get(key, '') for key in keys])
 
     for a in rc.suggestions:
@@ -147,6 +147,8 @@ def write_csv_response(csv: CSVWriter, rc: ResultContainer) -> None:  # pylint: 
 
 class JSONEncoder(json.JSONEncoder):  # pylint: disable=missing-class-docstring
     def default(self, o):
+        if isinstance(o, msgspec.Struct):
+            return msgspec.to_builtins(o)
         if isinstance(o, datetime):
             return o.isoformat()
         if isinstance(o, timedelta):
@@ -156,20 +158,18 @@ class JSONEncoder(json.JSONEncoder):  # pylint: disable=missing-class-docstring
         return super().default(o)
 
 
-def get_json_response(sq: SearchQuery, rc: ResultContainer) -> str:
+def get_json_response(sq: "SearchQuery", rc: "ResultContainer") -> str:
     """Returns the JSON string of the results to a query (``application/json``)"""
-    results = rc.number_of_results
-    x = {
+    data = {
         'query': sq.query,
-        'number_of_results': results,
-        'results': rc.get_ordered_results(),
-        'answers': list(rc.answers),
+        'results': [_.as_dict() for _ in rc.get_ordered_results()],
+        'answers': [_.as_dict() for _ in rc.answers],
         'corrections': list(rc.corrections),
         'infoboxes': rc.infoboxes,
         'suggestions': list(rc.suggestions),
         'unresponsive_engines': get_translated_errors(rc.unresponsive_engines),
     }
-    response = json.dumps(x, cls=JSONEncoder)
+    response = json.dumps(data, cls=JSONEncoder)
     return response
 
 
@@ -178,30 +178,22 @@ def get_themes(templates_path):
     return os.listdir(templates_path)
 
 
-def get_hash_for_file(file: pathlib.Path) -> str:
-    m = hashlib.sha1()
-    with file.open('rb') as f:
-        m.update(f.read())
-    return m.hexdigest()
+def get_static_file_list() -> list[str]:
+    file_list = []
+    static_path = pathlib.Path(str(get_setting("ui.static_path")))
 
-
-def get_static_files(static_path: str) -> Dict[str, str]:
-    static_files: Dict[str, str] = {}
-    static_path_path = pathlib.Path(static_path)
-
-    def walk(path: pathlib.Path):
-        for file in path.iterdir():
-            if file.name.startswith('.'):
+    def _walk(path: pathlib.Path):
+        for f in path.iterdir():
+            if f.name.startswith('.'):
                 # ignore hidden file
                 continue
-            if file.is_file():
-                static_files[str(file.relative_to(static_path_path))] = get_hash_for_file(file)
-            if file.is_dir() and file.name not in ('node_modules', 'src'):
-                # ignore "src" and "node_modules" directories
-                walk(file)
+            if f.is_file():
+                file_list.append(str(f.relative_to(static_path)))
+            if f.is_dir():
+                _walk(f)
 
-    walk(static_path_path)
-    return static_files
+    _walk(static_path)
+    return file_list
 
 
 def get_result_templates(templates_path):
@@ -316,25 +308,10 @@ def searxng_l10n_timespan(dt: datetime) -> str:  # pylint: disable=invalid-name
     return format_date(dt)
 
 
-def is_flask_run_cmdline():
-    """Check if the application was started using "flask run" command line
-
-    Inspect the callstack.
-    See https://github.com/pallets/flask/blob/master/src/flask/__main__.py
-
-    Returns:
-        bool: True if the application was started using "flask run".
-    """
-    frames = inspect.stack()
-    if len(frames) < 2:
-        return False
-    return frames[-2].filename.endswith('flask/cli.py')
-
-
 NO_SUBGROUPING = 'without further subgrouping'
 
 
-def group_engines_in_tab(engines: Iterable[Engine]) -> List[Tuple[str, Iterable[Engine]]]:
+def group_engines_in_tab(engines: "Iterable[Engine]") -> List[Tuple[str, "Iterable[Engine]"]]:
     """Groups an Iterable of engines by their first non tab category (first subgroup)"""
 
     def get_subgroup(eng):
@@ -345,9 +322,9 @@ def group_engines_in_tab(engines: Iterable[Engine]) -> List[Tuple[str, Iterable[
         return (group[0] == NO_SUBGROUPING, group[0].lower())
 
     def engine_sort_key(engine):
-        return (engine.about.get('language', ''), engine.name)
+        return (engine.language, engine.name)
 
-    tabs = list(settings['categories_as_tabs'].keys())
+    tabs = list(get_setting('categories_as_tabs').keys())
     subgroups = itertools.groupby(sorted(engines, key=get_subgroup), get_subgroup)
     sorted_groups = sorted(((name, list(engines)) for name, engines in subgroups), key=group_sort_key)
 

@@ -4,12 +4,6 @@
 Engine Implementations
 ======================
 
-.. contents::
-   :depth: 2
-   :local:
-   :backlinks: entry
-
-
 .. toctree::
    :caption: Framework Components
    :maxdepth: 2
@@ -17,6 +11,14 @@ Engine Implementations
    enginelib
    engines
    engine_overview
+
+
+ResultList and engines
+======================
+
+.. autoclass:: searx.result_types.ResultList
+
+.. autoclass:: searx.result_types.EngineResults
 
 
 Engine Types
@@ -45,6 +47,7 @@ Online Engines
    demo/demo_online
    xpath
    mediawiki
+   json_engine
 
 .. toctree::
    :maxdepth: 1
@@ -93,7 +96,7 @@ Online Currency
 
    - :py:obj:`processors.online_currency <searx.search.processors.online_currency>`
 
-*no engine of this type is documented yet / comming soon*
+*no engine of this type is documented yet / coming soon*
 
 .. _online dictionary:
 
@@ -104,4 +107,4 @@ Online Dictionary
 
    - :py:obj:`processors.online_dictionary <searx.search.processors.online_dictionary>`
 
-*no engine of this type is documented yet / comming soon*
+*no engine of this type is documented yet / coming soon*

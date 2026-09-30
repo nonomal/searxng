@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import  sys, os
+import os
 from pathlib import Path
-from pallets_sphinx_themes import ProjectLink
 
 from searx import get_setting
 from searx.version import VERSION_STRING, GIT_URL, GIT_BRANCH
@@ -54,7 +53,7 @@ searx.engines.load_engines(searx.settings['engines'])
 jinja_contexts = {
     'searx': {
         'engines': searx.engines.engines,
-        'plugins': searx.plugins.plugins,
+        'plugins': searx.plugins.STORAGE,
         'version': {
             'node': os.getenv('NODE_MINIMUM_VERSION')
         },
@@ -98,7 +97,6 @@ extlinks['pull-searx'] = ('https://github.com/searx/searx/pull/%s', 'PR %s')
 extlinks['origin'] = (GIT_URL + '/blob/' + GIT_BRANCH + '/%s', 'git://%s')
 extlinks['patch'] = (GIT_URL + '/commit/%s', '#%s')
 extlinks['docs'] = (DOCS_URL + '/%s', 'docs: %s')
-extlinks['pypi'] = ('https://pypi.org/project/%s', 'PyPi: %s')
 extlinks['man'] = ('https://manpages.debian.org/jump?q=%s', '%s')
 #extlinks['role'] = (
 #    'https://www.sphinx-doc.org/en/master/usage/restructuredtext/roles.html#role-%s', '')
@@ -117,7 +115,6 @@ extensions = [
     'sphinx.ext.viewcode',
     "sphinx.ext.autodoc",
     "sphinx.ext.intersphinx",
-    "pallets_sphinx_themes",
     "sphinx_issues", # https://github.com/sloria/sphinx-issues/blob/master/README.rst
     "sphinx_jinja",  # https://github.com/tardyp/sphinx-jinja
     "sphinxcontrib.programoutput",  # https://github.com/NextThought/sphinxcontrib-programoutput
@@ -129,8 +126,9 @@ extensions = [
     'notfound.extension',  # https://github.com/readthedocs/sphinx-notfound-page
 ]
 
+# autodoc_typehints = "description"
 autodoc_default_options = {
-    'member-order': 'groupwise',
+    'member-order': 'bysource',
 }
 
 myst_enable_extensions = [
@@ -142,27 +140,63 @@ suppress_warnings = ['myst.domains']
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),
     "babel" : ("https://babel.readthedocs.io/en/latest/", None),
-    "flask": ("https://flask.palletsprojects.com/", None),
+    "flask": ("https://flask.palletsprojects.com/en/stable/", None),
     "flask_babel": ("https://python-babel.github.io/flask-babel/", None),
-    # "werkzeug": ("https://werkzeug.palletsprojects.com/", None),
-    "jinja": ("https://jinja.palletsprojects.com/", None),
+    "werkzeug": ("https://werkzeug.palletsprojects.com/en/stable/", None),
+    "jinja": ("https://jinja.palletsprojects.com/en/stable/", None),
     "linuxdoc" : ("https://return42.github.io/linuxdoc/", None),
     "sphinx" : ("https://www.sphinx-doc.org/en/master/", None),
-    "redis": ('https://redis.readthedocs.io/en/stable/', None),
+    "valkey": ('https://valkey-py.readthedocs.io/en/stable/', None),
+    "pygments": ("https://pygments.org/", None),
+    "lxml": ('https://lxml.de/apidoc', None),
 }
 
 issues_github_path = "searxng/searxng"
 
 # HTML -----------------------------------------------------------------
 
+html_theme = "furo"
+html_theme_options = {
+    # link to project source at GitHub for editing and viewing docs code
+    "source_repository": "https://github.com/searxng/searxng/",
+    "source_branch": "master",
+    "source_directory": "docs/",
+
+    # Show link to repository & searx.space in footer
+    "footer_icons": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/searxng/searxng/",
+            "html": "&#x1F4BE;",
+        },
+        {
+            "name": "searx.space",
+            "url": "https://searx.space/",
+            "html": "&#x1F310;",
+        },
+    ],
+}
+
+html_sidebars = {
+    "**": [
+        "sidebar/scroll-start.html",
+        "sidebar/brand.html",
+        "sidebar/search.html",
+        "sidebar/navigation.html",
+        "sidebar/ethical-ads.html",
+        "sidebar/scroll-end.html",
+    ]
+}
+
+html_static_path = ['_static']
+
+html_css_files = [
+    'searxng.css',
+]
+
 # https://searxng.github.io/searxng --> '/searxng/'
 # https://docs.searxng.org --> '/'
 notfound_urls_prefix = '/'
-
-sys.path.append(os.path.abspath('_themes'))
-sys.path.insert(0, os.path.abspath("../utils/"))
-html_theme_path = ['_themes']
-html_theme = "searxng"
 
 # sphinx.ext.imgmath setup
 html_math_renderer = 'imgmath'
@@ -171,34 +205,10 @@ imgmath_font_size = 14
 # sphinx.ext.imgmath setup END
 
 html_show_sphinx = False
-html_theme_options = {"index_sidebar_logo": True}
-html_context = {"project_links": [] }
-html_context["project_links"].append(ProjectLink("Source", GIT_URL + '/tree/' + GIT_BRANCH))
-
-if WIKI_URL:
-    html_context["project_links"].append(ProjectLink("Wiki", WIKI_URL))
-if PUBLIC_INSTANCES:
-    html_context["project_links"].append(ProjectLink("Public instances", PUBLIC_INSTANCES))
-if ISSUE_URL:
-    html_context["project_links"].append(ProjectLink("Issue Tracker", ISSUE_URL))
-if PRIVACYPOLICY_URL:
-    html_context["project_links"].append(ProjectLink("Privacy Policy", PRIVACYPOLICY_URL))
-if CONTACT_URL:
-    html_context["project_links"].append(ProjectLink("Contact", CONTACT_URL))
-
-html_sidebars = {
-    "**": [
-        "globaltoc.html",
-        "project.html",
-        "relations.html",
-        "searchbox.html",
-        "sourcelink.html"
-    ],
-}
-singlehtml_sidebars = {"index": ["project.html", "localtoc.html"]}
-html_logo = "../src/brand/searxng-wordmark.svg"
+html_logo = "../client/simple/src/brand/searxng-wordmark.svg"
 html_title = "SearXNG Documentation ({})".format(VERSION_STRING)
 html_show_sourcelink = True
+html_copy_source = True
 
 # LaTeX ----------------------------------------------------------------
 

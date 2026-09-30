@@ -1,17 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# pylint: disable=too-many-branches
-"""In addition to rewriting/replace reslut URLs, the *hoostnames* plugin offers
-other features.
-
-.. attention::
-
-   The 'Hostnames plugin' from `PR-3463
-   <https://github.com/searxng/searxng/pull/3463>`_ is a rewrite of the
-   'Hostname replace' plugin.  Backwards compatibility is guaranteed for a
-   transitional period, but this will end soon.
-
-   **To maintainers of SearXNG instances, please modify your old plugin config
-   to the new.**
+# pylint: disable=too-many-branches, unused-argument
+"""During the initialization phase, the plugin checks whether a ``hostnames:``
+configuration exists. If this is not the case, the plugin is not included in the
+PluginStorage (it is not available for selection).
 
 - ``hostnames.replace``: A **mapping** of regular expressions to hostnames to be
   replaced by other hostnames.
@@ -89,112 +80,121 @@ something like this:
 
 """
 
+import typing as t
+
 import re
 from urllib.parse import urlunparse, urlparse
 
-from flask_babel import gettext
+from flask_babel import gettext  # pyright: ignore[reportUnknownVariableType]
 
 from searx import settings
-from searx.plugins import logger
-from searx.settings_loader import get_yaml_file
+from searx.result_types._base import MainResult, LegacyResult
+from searx.settings_loader import get_yaml_cfg
+from searx.plugins import Plugin, PluginInfo
 
-name = gettext('Hostnames plugin')
-description = gettext('Rewrite hostnames, remove results or prioritize them based on the hostname')
-default_on = False
-preference_section = 'general'
+from ._core import log
 
-plugin_id = 'hostnames'
+if t.TYPE_CHECKING:
+    import flask
+    from searx.search import SearchWithPlugins
+    from searx.extended_types import SXNG_Request
+    from searx.result_types import Result
+    from searx.plugins import PluginCfg
 
-logger = logger.getChild(plugin_id)
-parsed = 'parsed_url'
-_url_fields = ['iframe_src', 'audio_src']
-
-
-def _load_regular_expressions(settings_key):
-    setting_value = settings.get(plugin_id, {}).get(settings_key)
-
-    if not setting_value:
-        return {}
-
-    # load external file with configuration
-    if isinstance(setting_value, str):
-        setting_value = get_yaml_file(setting_value)
-
-    if isinstance(setting_value, list):
-        return {re.compile(r) for r in setting_value}
-
-    if isinstance(setting_value, dict):
-        return {re.compile(p): r for (p, r) in setting_value.items()}
-
-    return {}
+REPLACE: dict[re.Pattern, str] = {}
+REMOVE: set = set()
+HIGH: set = set()
+LOW: set = set()
 
 
-# compatibility fallback for old hostname replace plugin
-# TODO: remove in the future once most/all instance maintainers finished migrating # pylint: disable=fixme
-def _load_regular_expressions_with_fallback(settings_key):
-    expressions = _load_regular_expressions(settings_key)
-    if expressions:
-        return expressions
+class SXNGPlugin(Plugin):
+    """Rewrite hostnames, remove results or prioritize them."""
 
-    # fallback to the old `hostname_replace` settings format
-    # pylint: disable=import-outside-toplevel, cyclic-import
-    hostname_replace_config = settings.get('hostname_replace', {})
-    if hostname_replace_config:
-        from searx.plugins.hostname_replace import deprecated_msg
+    id = "hostnames"
 
-        deprecated_msg()
+    def __init__(self, plg_cfg: "PluginCfg") -> None:
+        super().__init__(plg_cfg)
+        self.info = PluginInfo(
+            id=self.id,
+            name=gettext("Hostnames plugin"),
+            description=gettext("Rewrite hostnames and remove or prioritize results based on the hostname"),
+            preference_section="general",
+        )
 
-    if settings_key == 'replace':
-        return {re.compile(p): r for (p, r) in hostname_replace_config.items() if r}
+    def on_result(self, request: "SXNG_Request", search: "SearchWithPlugins", result: "Result") -> bool:
 
-    return {re.compile(p) for (p, r) in hostname_replace_config.items() if not r}
+        for pattern in REMOVE:
+            if result.parsed_url and pattern.search(result.parsed_url.netloc):
+                # if the link (parsed_url) of the result match, then remove the
+                # result from the result list, in any other case, the result
+                # remains in the list / see final "return True" below.
+                # log.debug("FIXME: remove [url/parsed_url] %s %s", pattern.pattern, result.url)
+                return False
 
+        result.filter_urls(filter_url_field)
 
-replacements = _load_regular_expressions_with_fallback('replace')
-removables = _load_regular_expressions_with_fallback('remove')
-high_priority = _load_regular_expressions('high_priority')
-low_priority = _load_regular_expressions('low_priority')
+        if isinstance(result, (MainResult, LegacyResult)):
+            for pattern in LOW:
+                if result.parsed_url and pattern.search(result.parsed_url.netloc):
+                    result.priority = "low"
 
+            for pattern in HIGH:
+                if result.parsed_url and pattern.search(result.parsed_url.netloc):
+                    result.priority = "high"
 
-def _matches_parsed_url(result, pattern):
-    return parsed in result and pattern.search(result[parsed].netloc)
+        return True
 
+    def init(self, app: "flask.Flask") -> bool:  # pylint: disable=unused-argument
+        global REPLACE, REMOVE, HIGH, LOW  # pylint: disable=global-statement
 
-def on_result(_request, _search, result):
-    for pattern, replacement in replacements.items():
-        if _matches_parsed_url(result, pattern):
-            logger.debug(result['url'])
-            result[parsed] = result[parsed]._replace(netloc=pattern.sub(replacement, result[parsed].netloc))
-            result['url'] = urlunparse(result[parsed])
-            logger.debug(result['url'])
-
-        for url_field in _url_fields:
-            if not result.get(url_field):
-                continue
-
-            url_src = urlparse(result[url_field])
-            if pattern.search(url_src.netloc):
-                url_src = url_src._replace(netloc=pattern.sub(replacement, url_src.netloc))
-                result[url_field] = urlunparse(url_src)
-
-    for pattern in removables:
-        if _matches_parsed_url(result, pattern):
+        if not settings.get(self.id):
+            # Remove plugin, if there isn't a "hostnames:" setting
             return False
 
-        for url_field in _url_fields:
-            if not result.get(url_field):
-                continue
+        REPLACE = self._load_regular_expressions("replace") or {}  # type: ignore
+        REMOVE = self._load_regular_expressions("remove") or set()  # type: ignore
+        HIGH = self._load_regular_expressions("high_priority") or set()  # type: ignore
+        LOW = self._load_regular_expressions("low_priority") or set()  # type: ignore
 
-            url_src = urlparse(result[url_field])
-            if pattern.search(url_src.netloc):
-                del result[url_field]
+        return True
 
-    for pattern in low_priority:
-        if _matches_parsed_url(result, pattern):
-            result['priority'] = 'low'
+    def _load_regular_expressions(self, settings_key) -> dict[re.Pattern, str] | set | None:
+        setting_value = settings.get(self.id, {}).get(settings_key)
 
-    for pattern in high_priority:
-        if _matches_parsed_url(result, pattern):
-            result['priority'] = 'high'
+        if not setting_value:
+            return None
+
+        # load external file with configuration
+        if isinstance(setting_value, str):
+            setting_value = get_yaml_cfg(setting_value)
+
+        if isinstance(setting_value, list):
+            return {re.compile(r) for r in setting_value}
+
+        if isinstance(setting_value, dict):
+            return {re.compile(p): r for (p, r) in setting_value.items()}
+
+        return None
+
+
+def filter_url_field(result: "Result|LegacyResult", field_name: str, url_src: str) -> bool | str:
+    """Returns bool ``True`` to use URL unchanged (``False`` to ignore URL).
+    If URL should be modified, the returned string is the new URL to use."""
+
+    if not url_src:
+        log.debug("missing a URL in field %s", field_name)
+        return True
+
+    url_src_parsed = urlparse(url=url_src)
+
+    for pattern in REMOVE:
+        if pattern.search(url_src_parsed.netloc):
+            return False
+
+    for pattern, replacement in REPLACE.items():
+        if pattern.search(url_src_parsed.netloc):
+            new_url = url_src_parsed._replace(netloc=pattern.sub(replacement, url_src_parsed.netloc))
+            new_url = urlunparse(new_url)
+            return new_url
 
     return True

@@ -35,15 +35,15 @@ def response(resp):
     results = []
 
     for item in search_res:
-        img = 'https://findthatmeme.us-southeast-1.linodeobjects.com/' + item['image_path']
-        thumb = 'https://findthatmeme.us-southeast-1.linodeobjects.com/thumb/' + item.get('thumbnail', '')
-        date = datetime.strptime(item["updated_at"].split("T")[0], "%Y-%m-%d")
-        formatted_date = datetime.utcfromtimestamp(date.timestamp())
+        img = 'https://s3.thehackerblog.com/findthatmeme/' + item['image_path']
+        thumb = 'https://s3.thehackerblog.com/findthatmeme/thumb/' + item.get('thumbnail', '')
+        date = datetime.fromisoformat(item["updated_at"].split("T")[0])
+        formatted_date = datetime.fromtimestamp(date.timestamp())
 
         results.append(
             {
-                'url': item['source_page_url'],
-                'title': item['source_site'],
+                'url': item.get('source_page_url'),
+                'title': item.get('source_site'),
                 'img_src': img if item['type'] == 'IMAGE' else thumb,
                 'filesize': humanize_bytes(item['meme_file_size']),
                 'publishedDate': formatted_date,

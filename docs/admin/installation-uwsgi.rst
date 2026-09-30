@@ -9,12 +9,6 @@ uWSGI
    - `systemd.unit`_
    - `uWSGI Emperor`_
 
-.. contents::
-   :depth: 2
-   :local:
-   :backlinks: entry
-
-
 .. _systemd.unit: https://www.freedesktop.org/software/systemd/man/systemd.unit.html
 .. _One service per app in systemd:
     https://uwsgi-docs.readthedocs.io/en/latest/Systemd.html#one-service-per-app-in-systemd
@@ -181,10 +175,7 @@ uWSGI setup
 
 Create the configuration ini-file according to your distribution and restart the
 uwsgi application.  As shown below, the :ref:`installation scripts` installs by
-default:
-
-- a uWSGI setup that listens on a socket and
-- enables :ref:`cache busting <static_use_hash>`.
+default a uWSGI setup that listens on a socket.
 
 .. tabs::
 
@@ -235,19 +226,19 @@ major release is from Dec. 2013, since the there had been only bugfix releases
   **In Tyrant mode, there is no way to get additional groups, and the uWSGI
   process misses additional permissions that may be needed.**
 
-For example on Fedora (RHEL): If you try to install a redis DB with socket
+For example on Fedora (RHEL): If you try to install a valkey DB with socket
 communication and you want to connect to it from the SearXNG uWSGI, you will see a
 *Permission denied* in the log of your instance::
 
-  ERROR:searx.redisdb: [searxng (993)] can't connect redis DB ...
-  ERROR:searx.redisdb:   Error 13 connecting to unix socket: /usr/local/searxng-redis/run/redis.sock. Permission denied.
+  ERROR:searx.valkeydb: [searxng (993)] can't connect valkey DB ...
+  ERROR:searx.valkeydb:   Error 13 connecting to unix socket: /usr/local/searxng-valkey/run/valkey.sock. Permission denied.
   ERROR:searx.plugins.limiter: init limiter DB failed!!!
 
 Even if your *searxng* user of the uWSGI process is added to additional groups
-to give access to the socket from the redis DB::
+to give access to the socket from the valkey DB::
 
   $ groups searxng
-  searxng : searxng searxng-redis
+  searxng : searxng searxng-valkey
 
 To see the effective groups of the uwsgi process, you have to look at the status
 of the process, by example::
@@ -257,7 +248,7 @@ of the process, by example::
   searxng      186      93  0 12:44 ?        00:00:01 /usr/sbin/uwsgi --ini searxng.ini
 
 Here you can see that the additional "Groups" of PID 186 are unset (missing gid
-of ``searxng-redis``)::
+of ``searxng-valkey``)::
 
   $ cat /proc/186/task/186/status
   ...

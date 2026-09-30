@@ -28,11 +28,11 @@ This is an example configuration for searching in the collection
 """
 
 # pylint: disable=global-statement
-
-from json import loads
+import typing as t
 from urllib.parse import urlencode
 from searx.exceptions import SearxEngineAPIException
-
+from searx.result_types import EngineResults
+from searx.extended_types import SXNG_Response
 
 base_url = 'http://localhost:8983'
 collection = ''
@@ -45,7 +45,7 @@ _search_url = ''
 paging = True
 
 
-def init(_):
+def setup(_: dict[str, t.Any]) -> bool | None:
     if collection == '':
         raise ValueError('collection cannot be empty')
 
@@ -72,27 +72,21 @@ def request(query, params):
     return params
 
 
-def response(resp):
-    resp_json = __get_response(resp)
-
-    results = []
-    for result in resp_json['response']['docs']:
-        r = {key: str(value) for key, value in result.items()}
-        if len(r) == 0:
-            continue
-        r['template'] = 'key-value.html'
-        results.append(r)
-
-    return results
-
-
-def __get_response(resp):
+def response(resp: SXNG_Response) -> EngineResults:
     try:
-        resp_json = loads(resp.text)
+        resp_json = resp.json()
     except Exception as e:
         raise SearxEngineAPIException("failed to parse response") from e
 
-    if 'error' in resp_json:
-        raise SearxEngineAPIException(resp_json['error']['msg'])
+    if "error" in resp_json:
+        raise SearxEngineAPIException(resp_json["error"]["msg"])
 
-    return resp_json
+    res = EngineResults()
+
+    for result in resp_json["response"]["docs"]:
+        kvmap = {key: str(value) for key, value in result.items()}
+        if not kvmap:
+            continue
+        res.add(res.types.KeyValue(kvmap=kvmap))
+
+    return res

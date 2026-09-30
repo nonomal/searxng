@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""BASE (Scholar publications)
+"""BASE (Scholar publications)"""
 
-"""
 from datetime import datetime
 import re
 
 from urllib.parse import urlencode
 from lxml import etree
-from searx.utils import searx_useragent
+from searx.utils import searxng_useragent
 
 # about
 about = {
@@ -28,10 +27,10 @@ base_url = (
 
 # engine dependent config
 paging = True
-number_of_results = 10
+page_size = 10
 
 # shortcuts for advanced search
-shorcut_dict = {
+shortcut_dict = {
     # user-friendly keywords
     'format:': 'dcformat:',
     'author:': 'dccreator:',
@@ -55,21 +54,21 @@ shorcut_dict = {
 
 def request(query, params):
     # replace shortcuts with API advanced search keywords
-    for key, val in shorcut_dict.items():
+    for key, val in shortcut_dict.items():
         query = re.sub(key, val, query)
 
     # basic search
-    offset = (params['pageno'] - 1) * number_of_results
+    offset = (params['pageno'] - 1) * page_size
 
     string_args = {
         'query': urlencode({'query': query}),
         'offset': offset,
-        'hits': number_of_results,
+        'hits': page_size,
     }
 
     params['url'] = base_url.format(**string_args)
 
-    params['headers']['User-Agent'] = searx_useragent()
+    params['headers']['User-Agent'] = searxng_useragent()
     return params
 
 

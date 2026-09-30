@@ -1,14 +1,27 @@
-name: "Update searx.data"
+---
+name: Update searx.data
+
+# yamllint disable-line rule:truthy
 on:
+  workflow_dispatch:
   schedule:
     - cron: "59 23 28 * *"
-  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.14"
 
 jobs:
-  updateData:
-    name: Update data - ${{ matrix.fetch }}
-    runs-on: ubuntu-20.04
-    if: ${{ github.repository_owner == 'searxng'}}
+  data:
+    if: github.repository_owner == 'searxng'
+    name: ${{ matrix.fetch }}
+    runs-on: ubuntu-26.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -18,50 +31,50 @@ jobs:
           - update_external_bangs.py
           - update_firefox_version.py
           - update_engine_traits.py
-          - update_wikidata_units.py
+          - update_wikidata.py
           - update_engine_descriptions.py
+
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Ubuntu packages
-        run: |
-          sudo ./utils/searxng.sh install packages
-
-      - name: Set up Python
-        uses: actions/setup-python@v2
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.9'
-          architecture: 'x64'
+          python-version: "${{ env.PYTHON_VERSION }}"
 
-      - name: Install Python dependencies
-        run: |
-          make V=1 install
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: "false"
+
+      - name: Setup cache Python
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          key: "python-${{ env.PYTHON_VERSION }}-${{ runner.arch }}-${{ hashFiles('./requirements*.txt') }}"
+          restore-keys: |
+            python-${{ env.PYTHON_VERSION }}-${{ runner.arch }}-
+          path: "./local/"
+
+      - name: Setup venv
+        run: make V=1 install
 
       - name: Fetch data
-        env:
-          FETCH_SCRIPT: ./searxng_extra/update/${{ matrix.fetch }}
-        run: |
-          V=1 ./manage pyenv.cmd python "$FETCH_SCRIPT"
+        run: V=1 ./manage pyenv.cmd python "./searxng_extra/update/${{ matrix.fetch }}"
 
-      - name: Create Pull Request
-        id: cpr
-        uses: peter-evans/create-pull-request@v3
+      - name: Create PR
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
         with:
-          commit-message: '[data] update searx.data - ${{ matrix.fetch }}'
-          committer: searxng-bot <noreply@github.com>
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-          signoff: false
-          branch: update_data_${{ matrix.fetch }}
-          delete-branch: true
-          draft: false
-          title: '[data] update searx.data - ${{ matrix.fetch }}'
+          author: "searxng-bot <searxng-bot@users.noreply.github.com>"
+          committer: "searxng-bot <searxng-bot@users.noreply.github.com>"
+          title: "[mod] data: update searx.data - ${{ matrix.fetch }}"
+          commit-message: "[mod] data: update searx.data - ${{ matrix.fetch }}"
+          branch: "ci-data-${{ matrix.fetch }}"
+          delete-branch: "true"
+          draft: "false"
+          signoff: "false"
           body: |
-            update searx.data - ${{ matrix.fetch }}
+            Update searx.data - ${{ matrix.fetch }}
           labels: |
             data
-
-      - name: Check outputs
-        run: |
-          echo "Pull Request Number - ${{ steps.cpr.outputs.pull-request-number }}"
-          echo "Pull Request URL - ${{ steps.cpr.outputs.pull-request-url }}"

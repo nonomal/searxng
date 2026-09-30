@@ -6,8 +6,8 @@
 - :py:obj:`searx.locales.RTL_LOCALES`
 - :py:obj:`searx.locales.LOCALE_NAMES`
 """
+
 # pylint: disable=invalid-name
-from __future__ import annotations
 
 from typing import Set
 import json
@@ -25,7 +25,7 @@ from searx.locales import (
 )
 
 LOCALE_DATA_FILE = Path(searx_dir) / 'data' / 'locales.json'
-TRANSLATOINS_FOLDER = Path(searx_dir) / 'translations'
+TRANSLATIONS_FOLDER = Path(searx_dir) / 'translations'
 
 
 def main():

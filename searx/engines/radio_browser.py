@@ -6,29 +6,31 @@
 
 """
 
+import os
+import random
+import socket
 from urllib.parse import urlencode
+
 import babel
 from flask_babel import gettext
 
-from searx.network import get
+from searx.enginelib import EngineCache
 from searx.enginelib.traits import EngineTraits
 from searx.locales import language_tag
 
-traits: EngineTraits
-
 about = {
-    "website": 'https://www.radio-browser.info/',
-    "wikidata_id": 'Q111664849',
-    "official_api_documentation": 'https://de1.api.radio-browser.info/',
+    "website": "https://www.radio-browser.info/",
+    "wikidata_id": "Q111664849",
+    "official_api_documentation": "https://de1.api.radio-browser.info/",
     "use_official_api": True,
     "require_api_key": False,
-    "results": 'JSON',
+    "results": "JSON",
 }
+language_support = True
 paging = True
-categories = ['music', 'radio']
+categories = ["music", "radio"]
 
-base_url = "https://de1.api.radio-browser.info"  # see https://api.radio-browser.info/ for all nodes
-number_of_results = 10
+page_size = 10
 
 station_filters = []  # ['countrycode', 'language']
 """A list of filters to be applied to the search of radio stations.  By default
@@ -51,30 +53,85 @@ none filters are applied. Valid filters are:
 
 """
 
+CACHE: EngineCache
+"""Persistent (SQLite) key/value cache that deletes its values after ``expire``
+seconds."""
+
+
+def init(_):
+    global CACHE  # pylint: disable=global-statement
+    CACHE = EngineCache("radio_browser")
+
+    # In an environment with competing processes, the initial loading of the
+    # cache is required only once.
+    eng_state: str | None = CACHE.get("eng_state")
+    if not eng_state or not eng_state.startswith("STATE:"):
+        CACHE.set("eng_state", f"STATE: being initialized by PID {os.getpid()}")
+        try:
+            server_list()
+        except Exception:
+            CACHE.set("eng_state", f"ERROR: initialization by PID {os.getpid()} failed.")
+            raise
+    else:
+        logger.debug(eng_state)
+
+
+def server_list() -> list[str]:
+
+    servers = CACHE.get("servers", [])
+    if servers:
+        return servers
+
+    # hint: can take up to 40sec!
+    ips = socket.getaddrinfo("all.api.radio-browser.info", 80, 0, 0, socket.IPPROTO_TCP)
+    for ip_tuple in ips:
+        _ip: str = ip_tuple[4][0]  # type: ignore
+        try:
+            url = socket.gethostbyaddr(_ip)[0]
+        except socket.herror:
+            # https://github.com/searxng/searxng/issues/5439
+            continue
+        srv = "https://" + url
+        if srv not in servers:
+            servers.append(srv)
+
+    # update server list once in 24h
+    CACHE.set(key="servers", value=servers, expire=60 * 60 * 24)
+
+    return servers
+
 
 def request(query, params):
+
+    servers = server_list()
+    if not servers:
+        logger.error("Fetched server list is empty!")
+        params["url"] = None
+        return
+
+    server = random.choice(servers)
+
     args = {
-        'name': query,
-        'order': 'votes',
-        'offset': (params['pageno'] - 1) * number_of_results,
-        'limit': number_of_results,
-        'hidebroken': 'true',
-        'reverse': 'true',
+        "name": query,
+        "order": "votes",
+        "offset": (params["pageno"] - 1) * page_size,
+        "limit": page_size,
+        "hidebroken": "true",
+        "reverse": "true",
     }
 
-    if 'language' in station_filters:
-        lang = traits.get_language(params['searxng_locale'])  # type: ignore
+    if "language" in station_filters:
+        lang = traits.get_language(params["searxng_locale"])  # type: ignore
         if lang:
-            args['language'] = lang
+            args["language"] = lang
 
-    if 'countrycode' in station_filters:
-        if len(params['searxng_locale'].split('-')) > 1:
-            countrycode = params['searxng_locale'].split('-')[-1].upper()
-            if countrycode in traits.custom['countrycodes']:  # type: ignore
-                args['countrycode'] = countrycode
+    if "countrycode" in station_filters:
+        if len(params["searxng_locale"].split("-")) > 1:
+            countrycode = params["searxng_locale"].split("-")[-1].upper()
+            if countrycode in traits.custom["countrycodes"]:  # type: ignore
+                args["countrycode"] = countrycode
 
-    params['url'] = f"{base_url}/json/stations/search?{urlencode(args)}"
-    return params
+    params["url"] = f"{server}/json/stations/search?{urlencode(args)}"
 
 
 def response(resp):
@@ -83,28 +140,28 @@ def response(resp):
     json_resp = resp.json()
 
     for result in json_resp:
-        url = result['homepage']
+        url = result["homepage"]
         if not url:
-            url = result['url_resolved']
+            url = result["url_resolved"]
 
         content = []
-        tags = ', '.join(result.get('tags', '').split(','))
+        tags = ", ".join(result.get("tags", "").split(","))
         if tags:
             content.append(tags)
-        for x in ['state', 'country']:
+        for x in ["state", "country"]:
             v = result.get(x)
             if v:
                 v = str(v).strip()
                 content.append(v)
 
         metadata = []
-        codec = result.get('codec')
-        if codec and codec.lower() != 'unknown':
-            metadata.append(f'{codec} ' + gettext('radio'))
+        codec = result.get("codec")
+        if codec and codec.lower() != "unknown":
+            metadata.append(f"{codec} " + gettext("radio"))
         for x, y in [
-            (gettext('bitrate'), 'bitrate'),
-            (gettext('votes'), 'votes'),
-            (gettext('clicks'), 'clickcount'),
+            (gettext("bitrate"), "bitrate"),
+            (gettext("votes"), "votes"),
+            (gettext("clicks"), "clickcount"),
         ]:
             v = result.get(y)
             if v:
@@ -112,12 +169,12 @@ def response(resp):
                 metadata.append(f"{x} {v}")
         results.append(
             {
-                'url': url,
-                'title': result['name'],
-                'thumbnail': result.get('favicon', '').replace("http://", "https://"),
-                'content': ' | '.join(content),
-                'metadata': ' | '.join(metadata),
-                'iframe_src': result['url_resolved'].replace("http://", "https://"),
+                "url": url,
+                "title": result["name"],
+                "thumbnail": result.get("favicon", "").replace("http://", "https://"),
+                "content": " | ".join(content),
+                "metadata": " | ".join(metadata),
+                "iframe_src": result["url_resolved"].replace("http://", "https://"),
             }
         )
 
@@ -135,16 +192,35 @@ def fetch_traits(engine_traits: EngineTraits):
     """
     # pylint: disable=import-outside-toplevel
 
+    init(None)
     from babel.core import get_global
+
+    from searx.network import get  # see https://github.com/searxng/searxng/issues/762
 
     babel_reg_list = get_global("territory_languages").keys()
 
-    language_list = get(f'{base_url}/json/languages').json()  # type: ignore
-    country_list = get(f'{base_url}/json/countries').json()  # type: ignore
+    server = server_list()[0]
+
+    resp = get(
+        f"{server}/json/languages",
+        timeout=5,
+    )
+    if not resp.ok:
+        raise RuntimeError("Response from radio-browser languages is not OK.")
+
+    language_list = resp.json()
+
+    resp = get(
+        f"{server}/json/countries",
+        timeout=5,
+    )
+    if not resp.ok:
+        raise RuntimeError("Response from radio-browser countries is not OK.")
+
+    country_list = resp.json()
 
     for lang in language_list:
-
-        babel_lang = lang.get('iso_639')
+        babel_lang = lang.get("iso_639")
         if not babel_lang:
             # the language doesn't have any iso code, and hence can't be parsed
             # print(f"ERROR: lang - no iso code in {lang}")
@@ -155,7 +231,7 @@ def fetch_traits(engine_traits: EngineTraits):
             # print(f"ERROR: language tag {babel_lang} is unknown by babel")
             continue
 
-        eng_tag = lang['name']
+        eng_tag = lang["name"]
         conflict = engine_traits.languages.get(sxng_tag)
         if conflict:
             if conflict != eng_tag:
@@ -165,11 +241,13 @@ def fetch_traits(engine_traits: EngineTraits):
 
     countrycodes = set()
     for region in country_list:
-        if region['iso_3166_1'] not in babel_reg_list:
+        # country_list contains duplicates that differ only in upper/lower case
+        _reg = region["iso_3166_1"].upper()
+        if _reg not in babel_reg_list:
             print(f"ERROR: region tag {region['iso_3166_1']} is unknown by babel")
             continue
-        countrycodes.add(region['iso_3166_1'])
+        countrycodes.add(_reg)
 
     countrycodes = list(countrycodes)
     countrycodes.sort()
-    engine_traits.custom['countrycodes'] = countrycodes
+    engine_traits.custom["countrycodes"] = countrycodes

@@ -13,8 +13,8 @@ about = {
     'use_official_api': False,
     'require_api_key': False,
     'results': 'JSON',
-    'language': 'de',
 }
+language = "de"
 
 paging = True
 categories = ['general']
@@ -51,7 +51,7 @@ def response(resp):
 
         publishedDate = None
         if result['extension'].get('publishingDate'):
-            publishedDate = datetime.utcfromtimestamp(result['extension']['publishingDate'])
+            publishedDate = datetime.fromtimestamp(result['extension']['publishingDate'])
 
         results.append(
             {

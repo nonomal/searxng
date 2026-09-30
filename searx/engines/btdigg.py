@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
- BTDigg (Videos, Music, Files)
+BTDigg (Videos, Music, Files)
 """
 
 from urllib.parse import quote, urljoin
@@ -38,7 +38,7 @@ def request(query, params):
 def response(resp):
     results = []
 
-    dom = html.fromstring(resp.text)
+    dom = resp.html()
 
     search_res = dom.xpath('//div[@class="one_result"]')
 
@@ -54,7 +54,6 @@ def response(resp):
 
         excerpt = result.xpath('.//div[@class="torrent_excerpt"]')[0]
         content = html.tostring(excerpt, encoding='unicode', method='text', with_tail=False)
-        # it is better to emit <br/> instead of |, but html tags are verboten
         content = content.strip().replace('\n', ' | ')
         content = ' '.join(content.split())
 

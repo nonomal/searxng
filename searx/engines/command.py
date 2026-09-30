@@ -74,6 +74,7 @@ Implementations
 ===============
 """
 
+import typing as t
 import re
 from os.path import expanduser, isabs, realpath, commonprefix
 from shlex import split as shlex_split
@@ -81,7 +82,7 @@ from subprocess import Popen, PIPE
 from threading import Thread
 
 from searx import logger
-
+from searx.result_types import EngineResults
 
 engine_type = 'offline'
 paging = True
@@ -93,14 +94,13 @@ query_enum = []
 environment_variables = {}
 working_dir = realpath('.')
 result_separator = '\n'
-result_template = 'key-value.html'
 timeout = 4.0
 
 _command_logger = logger.getChild('command')
 _compiled_parse_regex = {}
 
 
-def init(engine_settings):
+def setup(engine_settings: dict[str, t.Any]) -> bool | None:
     check_parsing_options(engine_settings)
 
     if 'command' not in engine_settings:
@@ -126,17 +126,17 @@ def init(engine_settings):
         environment_variables = engine_settings['environment_variables']
 
 
-def search(query, params):
+def search(query, params) -> EngineResults:
+    res = EngineResults()
     cmd = _get_command_to_run(query)
     if not cmd:
-        return []
+        return res
 
-    results = []
-    reader_thread = Thread(target=_get_results_from_process, args=(results, cmd, params['pageno']))
+    reader_thread = Thread(target=_get_results_from_process, args=(res, cmd, params['pageno']))
     reader_thread.start()
     reader_thread.join(timeout=timeout)
 
-    return results
+    return res
 
 
 def _get_command_to_run(query):
@@ -153,7 +153,7 @@ def _get_command_to_run(query):
     return cmd
 
 
-def _get_results_from_process(results, cmd, pageno):
+def _get_results_from_process(res: EngineResults, cmd, pageno):
     leftover = ''
     count = 0
     start, end = __get_results_limits(pageno)
@@ -173,12 +173,11 @@ def _get_results_from_process(results, cmd, pageno):
                     continue
 
                 if start <= count and count <= end:  # pylint: disable=chained-comparison
-                    result['template'] = result_template
-                    results.append(result)
+                    res.add(res.types.KeyValue(kvmap=result))
 
                 count += 1
                 if end < count:
-                    return results
+                    return res
 
             line = process.stdout.readline()
 

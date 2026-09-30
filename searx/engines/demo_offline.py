@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Within this module we implement a *demo offline engine*.  Do not look to
-close to the implementation, its just a simple example.  To get in use of this
-*demo* engine add the following entry to your engines list in ``settings.yml``:
+close to the implementation, its just a simple example.
+
+Configuration
+=============
+
+To get in use of this *demo* engine add the following entry to your engines list
+in ``settings.yml``:
 
 .. code:: yaml
 
@@ -10,34 +15,51 @@ close to the implementation, its just a simple example.  To get in use of this
     shortcut: demo
     disabled: false
 
+Implementations
+===============
+
 """
 
+import typing as t
 import json
 
-engine_type = 'offline'
-categories = ['general']
+from searx.result_types import EngineResults
+from searx.enginelib import EngineCache, EngineAbout
+
+if t.TYPE_CHECKING:
+    from searx.search.processors import RequestParams
+
+
+engine_type = "offline"
+categories = ["general"]
 disabled = True
 timeout = 2.0
 
-about = {
-    "wikidata_id": None,
-    "official_api_documentation": None,
-    "use_official_api": False,
-    "require_api_key": False,
-    "results": 'JSON',
-}
+language = "en"
+about = EngineAbout(
+    results="JSON",
+    description="Demo offline engine Engine with results in the English language.",
+)
 
 # if there is a need for globals, use a leading underline
-_my_offline_engine = None
+_my_offline_engine: str = ""
+
+CACHE: EngineCache
+"""Persistent (SQLite) key/value cache that deletes its values after ``expire``
+seconds."""
 
 
-def init(engine_settings=None):
-    """Initialization of the (offline) engine.  The origin of this demo engine is a
-    simple json string which is loaded in this example while the engine is
-    initialized.
+def setup(engine_settings: dict[str, t.Any]) -> bool:
+    """Dynamic setup of the engine settings.
 
+    The origin of this demo engine is a simple json string which is loaded in
+    this example while the engine is initialized.
+
+    For more details see :py:obj:`searx.enginelib.Engine.setup`.
     """
-    global _my_offline_engine  # pylint: disable=global-statement
+    global _my_offline_engine, CACHE  # pylint: disable=global-statement
+
+    CACHE = EngineCache(engine_settings["name"])
 
     _my_offline_engine = (
         '[ {"value": "%s"}'
@@ -47,26 +69,45 @@ def init(engine_settings=None):
         ']' % engine_settings.get('name')
     )
 
+    return True
 
-def search(query, request_params):
-    """Query (offline) engine and return results.  Assemble the list of results from
-    your local engine.  In this demo engine we ignore the 'query' term, usual
-    you would pass the 'query' term to your local engine to filter out the
-    results.
 
+def init(engine_settings: dict[str, t.Any]) -> bool:  # pylint: disable=unused-argument
+    """Initialization of the engine.
+
+    For more details see :py:obj:`searx.enginelib.Engine.init`.
     """
-    ret_val = []
+    return True
 
-    result_list = json.loads(_my_offline_engine)
 
-    for row in result_list:
-        entry = {
+def search(query: str, params: "RequestParams") -> EngineResults:
+    """Query (offline) engine and return results.  Assemble the list of results
+    from your local engine.
+
+    In this demo engine we ignore the 'query' term, usual you would pass the
+    'query' term to your local engine to filter out the results.
+    """
+    res = EngineResults()
+
+    count: int = CACHE.get("count", 0)
+    data_rows: list[dict[str, str]] = json.loads(_my_offline_engine)
+
+    for row in data_rows:
+        count += 1
+        kvmap = {
             'query': query,
-            'language': request_params['searxng_locale'],
+            'language': params['searxng_locale'],
             'value': row.get("value"),
-            # choose a result template or comment out to use the *default*
-            'template': 'key-value.html',
         }
-        ret_val.append(entry)
+        res.add(
+            res.types.KeyValue(
+                caption=f"Demo Offline Engine Result #{count}",
+                key_title="Name",
+                value_title="Value",
+                kvmap=kvmap,
+            )
+        )
 
-    return ret_val
+    # cache counter value for 20sec
+    CACHE.set("count", count, expire=20)
+    return res

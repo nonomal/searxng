@@ -12,6 +12,8 @@ Request:
 - :py:obj:`search_url`
 - :py:obj:`lang_all`
 - :py:obj:`soft_max_redirects`
+- :py:obj:`method`
+- :py:obj:`request_body`
 - :py:obj:`cookies`
 - :py:obj:`headers`
 
@@ -20,6 +22,7 @@ Paging:
 - :py:obj:`paging`
 - :py:obj:`page_size`
 - :py:obj:`first_page_num`
+- :py:obj:`send_page_num_on_first_page`
 
 Time Range:
 
@@ -29,7 +32,7 @@ Time Range:
 
 Safe-Search:
 
-- :py:obj:`safe_search_support`
+- :py:obj:`safesearch`
 - :py:obj:`safe_search_map`
 
 Response:
@@ -50,7 +53,7 @@ Example
 =======
 
 Here is a simple example of a XPath engine configured in the :ref:`settings
-engine` section, further read :ref:`engines-dev`.
+engines` section, further read :ref:`engines-dev`.
 
 .. code:: yaml
 
@@ -69,9 +72,12 @@ Implementations
 
 from urllib.parse import urlencode
 
-from lxml import html
 from searx.utils import extract_text, extract_url, eval_xpath, eval_xpath_list
 from searx.network import raise_for_httperror
+from searx.result_types import EngineResults
+from searx.enginelib import EngineAbout
+
+about = EngineAbout()
 
 search_url = None
 """
@@ -97,7 +103,7 @@ Replacements are:
 
 ``{safe_search}``:
   Safe-search :py:obj:`URL parameter <safe_search_map>` if engine
-  :py:obj:`supports safe-search <safe_search_support>`.  The ``{safe_search}``
+  :py:obj:`supports safe-search <safesearch>`.  The ``{safe_search}``
   replacement is taken from the :py:obj:`safes_search_map`.  Filter results::
 
       0: none, 1: moderate, 2:strict
@@ -151,6 +157,16 @@ headers = {}
 '''Some engines might offer different result based headers.  Possible use-case:
 To set header to moderate.'''
 
+method = 'GET'
+'''Some engines might require to do POST requests for search.'''
+
+request_body = ''
+'''The body of the request.  This can only be used if different :py:obj:`method`
+is set, e.g. ``POST``.  For formatting see the documentation of :py:obj:`search_url`::
+
+    search={query}&page={pageno}{time_range}{safe_search}
+'''
+
 paging = False
 '''Engine supports paging [True or False].'''
 
@@ -160,6 +176,10 @@ number, but an offset.'''
 
 first_page_num = 1
 '''Number of the first page (usually 0 or 1).'''
+
+send_page_num_on_first_page = True
+'''Whether to include the page number in the request for the first page.
+This can help if an engine blocks request that send a page number for the first page.'''
 
 time_range_support = False
 '''Engine supports search time range.'''
@@ -192,7 +212,7 @@ time_range_map = {
       year: 365
 '''
 
-safe_search_support = False
+safesearch = False
 '''Engine supports safe-search.'''
 
 safe_search_map = {0: '&filter=none', 1: '&filter=moderate', 2: '&filter=strict'}
@@ -221,13 +241,18 @@ def request(query, params):
         time_range = time_range_url.format(time_range_val=time_range_val)
 
     safe_search = ''
-    if params['safesearch']:
-        safe_search = safe_search_map[params['safesearch']]
+    safe_search_val = params.get('safesearch')
+    if safe_search_val is not None:
+        safe_search = safe_search_map[safe_search_val]
+
+    pageno = ""
+    if send_page_num_on_first_page or params["pageno"] != 1:
+        pageno = (params['pageno'] - 1) * page_size + first_page_num
 
     fargs = {
         'query': urlencode({'q': query})[2:],
         'lang': lang,
-        'pageno': (params['pageno'] - 1) * page_size + first_page_num,
+        'pageno': pageno,
         'time_range': time_range,
         'safe_search': safe_search,
     }
@@ -236,28 +261,37 @@ def request(query, params):
     params['headers'].update(headers)
 
     params['url'] = search_url.format(**fargs)
-    params['soft_max_redirects'] = soft_max_redirects
+    params['method'] = method
 
+    if request_body:
+        # don't url-encode the query if it's in the request body
+        fargs['query'] = query
+        params['data'] = request_body.format(**fargs)
+
+    params['soft_max_redirects'] = soft_max_redirects
     params['raise_for_httperror'] = False
 
     return params
 
 
-def response(resp):  # pylint: disable=too-many-branches
-    '''Scrap *results* from the response (see :ref:`engine results`).'''
+def response(resp) -> EngineResults:  # pylint: disable=too-many-branches
+    """Scrap *results* from the response (see :ref:`result types`)."""
+    results = EngineResults()
+
     if no_result_for_http_status and resp.status_code in no_result_for_http_status:
-        return []
+        return results
 
     raise_for_httperror(resp)
 
-    results = []
-    dom = html.fromstring(resp.text)
+    if not resp.text:
+        return results
+
+    dom = resp.html()
     is_onion = 'onions' in categories
 
     if results_xpath:
         for result in eval_xpath_list(dom, results_xpath):
-
-            url = extract_url(eval_xpath_list(result, url_xpath, min_len=1), search_url)
+            url = extract_url(eval_xpath(result, url_xpath), search_url)
             title = extract_text(eval_xpath_list(result, title_xpath, min_len=1))
             content = extract_text(eval_xpath_list(result, content_xpath))
             tmp_result = {'url': url, 'title': title, 'content': content}

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Hackernews
-"""
+"""Hackernews"""
 
 from datetime import datetime
 from urllib.parse import urlencode
 from dateutil.relativedelta import relativedelta
 
 from flask_babel import gettext
+from searx.utils import html_to_text
 
 # Engine metadata
 about = {
@@ -57,7 +57,11 @@ def request(query, params):
 
         if params['time_range']:
             search_type = 'search_by_date'
-            timestamp = (datetime.now() - relativedelta(**{f"{params['time_range']}s": 1})).timestamp()
+            timestamp = (
+                # pylint: disable=unexpected-keyword-arg
+                datetime.now()
+                - relativedelta(**{f"{params['time_range']}s": 1})  # type: ignore
+            ).timestamp()
             query_params["numericFilters"] = f"created_at_i>{timestamp}"
 
     params["url"] = f"{base_url}/{search_type}?{urlencode(query_params)}"
@@ -72,6 +76,7 @@ def response(resp):
         object_id = hit["objectID"]
         points = hit.get("points") or 0
         num_comments = hit.get("num_comments") or 0
+        content = hit.get("url") or html_to_text(hit.get("comment_text")) or html_to_text(hit.get("story_text"))
 
         metadata = ""
         if points != 0 or num_comments != 0:
@@ -80,10 +85,10 @@ def response(resp):
             {
                 "title": hit.get("title") or f"{gettext('author')}: {hit['author']}",
                 "url": f"https://news.ycombinator.com/item?id={object_id}",
-                "content": hit.get("url") or hit.get("comment_text") or hit.get("story_text") or "",
+                "content": content,
                 "metadata": metadata,
                 "author": hit["author"],
-                "publishedDate": datetime.utcfromtimestamp(hit["created_at_i"]),
+                "publishedDate": datetime.fromtimestamp(hit["created_at_i"]),
             }
         )
 

@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""This module implements functions needed for the autocompleter.
+"""This module implements functions needed for the autocompleter."""
 
-"""
 # pylint: disable=use-dict-literal
+import string
+import random
 
 import json
-from urllib.parse import urlencode, quote_plus
+import typing as t
+from urllib.parse import urlencode
 
-import lxml
-from httpx import HTTPError
+import lxml.etree
+import lxml.html
+from curl_cffi.requests.exceptions import RequestException
 
 from searx import settings
 from searx.engines import (
@@ -17,90 +20,124 @@ from searx.engines import (
 )
 from searx.network import get as http_get, post as http_post
 from searx.exceptions import SearxEngineResponseException
+from searx.utils import extr, gen_useragent
+from searx.data import ENGINE_TRAITS
+from searx.enginelib.traits import EngineTraits
+
+if t.TYPE_CHECKING:
+    from searx.extended_types import SXNG_Response
 
 
-def update_kwargs(**kwargs):
+def update_kwargs(**kwargs) -> None:  # type: ignore
     if 'timeout' not in kwargs:
         kwargs['timeout'] = settings['outgoing']['request_timeout']
     kwargs['raise_for_httperror'] = True
 
 
-def get(*args, **kwargs):
-    update_kwargs(**kwargs)
-    return http_get(*args, **kwargs)
+def get(*args, **kwargs) -> "SXNG_Response":  # type: ignore
+    update_kwargs(**kwargs)  # pyright: ignore[reportUnknownArgumentType]
+    return http_get(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]
 
 
-def post(*args, **kwargs):
-    update_kwargs(**kwargs)
-    return http_post(*args, **kwargs)
+def post(*args, **kwargs) -> "SXNG_Response":  # type: ignore
+    update_kwargs(**kwargs)  # pyright: ignore[reportUnknownArgumentType]
+    return http_post(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]
 
 
-def brave(query, _lang):
+def baidu(query: str, _sxng_locale: str) -> list[str]:
+    # baidu search autocompleter
+    base_url = "https://www.baidu.com/sugrec?"
+    response = get(base_url + urlencode({'ie': 'utf-8', 'json': 1, 'prod': 'pc', 'wd': query}))
+    results: list[str] = []
+
+    if response.ok:
+        data: dict[str, t.Any] = response.json()
+        if 'g' in data:
+            for item in data['g']:
+                results.append(item['q'])
+    return results
+
+
+def bing(query: str, _sxng_locale: str) -> list[str]:
+    # bing search autocompleter
+    base_url = "https://www.bing.com/AS/Suggestions?"
+    # cvid has to be a 32 character long string consisting of numbers and uppsercase characters
+    cvid = ''.join(random.choices(string.ascii_uppercase + string.digits, k=32))
+    response = get(base_url + urlencode({'qry': query, 'csr': 1, 'cvid': cvid}), enable_http3=True)
+    results: list[str] = []
+
+    if response.ok:
+        data: dict[str, t.Any] = response.json()
+        if 's' in data:
+            for item in data['s']:
+                completion: str = item['q']
+                # bing uses PUA unicode characters to highlight parts of the query
+                # we have to remove these manually (U+E000 and U+E001)
+                completion = completion.replace("\ue000", "").replace("\ue001", "")
+                results.append(completion)
+    return results
+
+
+def brave(query: str, _sxng_locale: str) -> list[str]:
     # brave search autocompleter
     url = 'https://search.brave.com/api/suggest?'
     url += urlencode({'q': query})
     country = 'all'
-    # if lang in _brave:
-    #    country = lang
-    kwargs = {'cookies': {'country': country}}
+    kwargs = {'cookies': {'country': country}, 'enable_http3': True}
     resp = get(url, **kwargs)
-
-    results = []
+    results: list[str] = []
 
     if resp.ok:
-        data = resp.json()
+        data: list[list[str]] = resp.json()
         for item in data[1]:
             results.append(item)
     return results
 
 
-def dbpedia(query, _lang):
-    # dbpedia autocompleter, no HTTPS
+def dbpedia(query: str, _sxng_locale: str) -> list[str]:
     autocomplete_url = 'https://lookup.dbpedia.org/api/search.asmx/KeywordSearch?'
+    resp = get(autocomplete_url + urlencode(dict(QueryString=query)))
+    results: list[str] = []
 
-    response = get(autocomplete_url + urlencode(dict(QueryString=query)))
-
-    results = []
-
-    if response.ok:
-        dom = lxml.etree.fromstring(response.content)
-        results = dom.xpath('//Result/Label//text()')
+    if resp.ok:
+        dom = lxml.etree.fromstring(resp.content)
+        results = [str(x) for x in dom.xpath('//Result/Label//text()')]
 
     return results
 
 
-def duckduckgo(query, sxng_locale):
+def duckduckgo(query: str, sxng_locale: str) -> list[str]:
     """Autocomplete from DuckDuckGo. Supports DuckDuckGo's languages"""
 
     traits = engines['duckduckgo'].traits
-    args = {
+    args: dict[str, str] = {
         'q': query,
         'kl': traits.get_region(sxng_locale, traits.all_locale),
     }
 
     url = 'https://duckduckgo.com/ac/?type=list&' + urlencode(args)
     resp = get(url)
+    results: list[str] = []
 
-    ret_val = []
     if resp.ok:
         j = resp.json()
         if len(j) > 1:
-            ret_val = j[1]
-    return ret_val
+            results = j[1]
+    return results
 
 
-def google_complete(query, sxng_locale):
-    """Autocomplete from Google.  Supports Google's languages and subdomains
+def google_complete(query: str, sxng_locale: str) -> list[str]:
+    """Autocomplete from Google.  Supports Google's languages
     (:py:obj:`searx.engines.google.get_google_info`) by using the async REST
     API::
 
-        https://{subdomain}/complete/search?{args}
+        https://www.google.com/complete/search?{args}
 
     """
 
-    google_info = google.get_google_info({'searxng_locale': sxng_locale}, engines['google'].traits)
-
-    url = 'https://{subdomain}/complete/search?{args}'
+    data = ENGINE_TRAITS.get("google") or {}
+    traits = EngineTraits(**data)
+    google_info: dict[str, t.Any] = google.get_google_info({'searxng_locale': sxng_locale}, traits)
     args = urlencode(
         {
             'q': query,
@@ -108,9 +145,10 @@ def google_complete(query, sxng_locale):
             'hl': google_info['params']['hl'],
         }
     )
-    results = []
-    resp = get(url.format(subdomain=google_info['subdomain'], args=args))
-    if resp.ok:
+    results: list[str] = []
+
+    resp = get('https://www.google.com/complete/search?' + args, enable_http3=True)
+    if resp and resp.ok:
         json_txt = resp.text[resp.text.find('[') : resp.text.find(']', -3) + 1]
         data = json.loads(json_txt)
         for item in data[0]:
@@ -118,22 +156,97 @@ def google_complete(query, sxng_locale):
     return results
 
 
-def mwmbl(query, _lang):
+def kagi(query: str, sxng_locale: str) -> list[str]:
+    """Autocomplete from Kagi."""
+
+    args: dict[str, str] = {'q': query}
+
+    if '-' in sxng_locale:
+        args['r'] = sxng_locale.split('-')[1].lower()
+
+    resp = get("https://kagisuggest.com/api/autosuggest?" + urlencode(args))
+    results: list[str] = []
+
+    if resp.ok:
+        data = resp.json()
+        if len(data) > 1:
+            results = data[1]
+    return results
+
+
+def mwmbl(query: str, _sxng_locale: str) -> list[str]:
     """Autocomplete from Mwmbl_."""
 
     # mwmbl autocompleter
     url = 'https://api.mwmbl.org/search/complete?{query}'
 
-    results = get(url.format(query=urlencode({'q': query}))).json()[1]
+    results: list[str] = get(url.format(query=urlencode({'q': query}))).json()[1]
 
     # results starting with `go:` are direct urls and not useful for auto completion
     return [result for result in results if not result.startswith("go: ") and not result.startswith("search: ")]
 
 
-def seznam(query, _lang):
+def naver(query: str, _sxng_locale: str) -> list[str]:
+    # Naver search autocompleter
+    url = f"https://ac.search.naver.com/nx/ac?{urlencode({'q': query, 'r_format': 'json', 'st': 0})}"
+    response = get(url)
+    results: list[str] = []
+
+    if response.ok:
+        data: dict[str, t.Any] = response.json()
+        if data.get('items'):
+            for item in data['items'][0]:
+                results.append(item[0])
+    return results
+
+
+def privacywall(query: str, sxng_locale: str) -> list[str]:
+    # Privacywall search autocompleter
+    country = None
+    if "-" in sxng_locale:
+        country = sxng_locale.split("-")[1]
+    args = {'q': query, 'cc': country}
+
+    url = f"https://www.privacywall.org/search/secure/suggestions.php?{urlencode(args)}"
+    response = get(url)
+
+    if not response.ok:
+        return []
+
+    data: list[list[str]] = response.json()
+    return data[1]
+
+
+def qihu360search(query: str, _sxng_locale: str) -> list[str]:
+    # 360Search search autocompleter
+    url = f"https://sug.so.360.cn/suggest?{urlencode({'format': 'json', 'word': query})}"
+    response = get(url)
+    results: list[str] = []
+
+    if response.ok:
+        data: dict[str, t.Any] = response.json()
+        if 'result' in data:
+            for item in data['result']:
+                results.append(item['word'])
+    return results
+
+
+def quark(query: str, _sxng_locale: str) -> list[str]:
+    # Quark search autocompleter
+    url = f"https://sugs.m.sm.cn/web?{urlencode({'q': query})}"
+    response = get(url)
+    results: list[str] = []
+
+    if response.ok:
+        data = response.json()
+        for item in data.get('r', []):
+            results.append(item['w'])
+    return results
+
+
+def seznam(query: str, _sxng_locale: str) -> list[str]:
     # seznam search autocompleter
     url = 'https://suggest.seznam.cz/fulltext/cs?{query}'
-
     resp = get(
         url.format(
             query=urlencode(
@@ -141,54 +254,93 @@ def seznam(query, _lang):
             )
         )
     )
+    results: list[str] = []
 
-    if not resp.ok:
-        return []
-
-    data = resp.json()
-    return [
-        ''.join([part.get('text', '') for part in item.get('text', [])])
-        for item in data.get('result', [])
-        if item.get('itemType', None) == 'ItemType.TEXT'
-    ]
-
-
-def stract(query, _lang):
-    # stract autocompleter (beta)
-    url = f"https://stract.com/beta/api/autosuggest?q={quote_plus(query)}"
-
-    resp = post(url)
-
-    if not resp.ok:
-        return []
-
-    return [suggestion['raw'] for suggestion in resp.json()]
+    if resp.ok:
+        data = resp.json()
+        results = [
+            ''.join([part.get('text', '') for part in item.get('text', [])])
+            for item in data.get('result', [])
+            if item.get('itemType', None) == 'ItemType.TEXT'
+        ]
+    return results
 
 
-def startpage(query, sxng_locale):
-    """Autocomplete from Startpage. Supports Startpage's languages"""
-    lui = engines['startpage'].traits.get_language(sxng_locale, 'english')
-    url = 'https://startpage.com/suggestions?{query}'
-    resp = get(url.format(query=urlencode({'q': query, 'segment': 'startpage.udog', 'lui': lui})))
-    data = resp.json()
-    return [e['text'] for e in data.get('suggestions', []) if 'text' in e]
+def sogou(query: str, _sxng_locale: str) -> list[str]:
+    # Sogou search autocompleter
+    base_url = "https://sor.html5.qq.com/api/getsug?"
+    resp = get(base_url + urlencode({'m': 'searxng', 'key': query}))
+    results: list[str] = []
+
+    if resp.ok:
+        raw_json = extr(resp.text, "[", "]", default="")
+        try:
+            data = json.loads(f"[{raw_json}]]")
+            results = data[1]
+        except json.JSONDecodeError:
+            pass
+    return results
 
 
-def swisscows(query, _lang):
+def startpage(query: str, sxng_locale: str) -> list[str]:
+    """Autocomplete from Startpage's Firefox extension.
+    Supports the languages specified in lang_map.
+    """
+
+    lang_map = {
+        'da': 'dansk',
+        'de': 'deutsch',
+        'en': 'english',
+        'es': 'espanol',
+        'fr': 'francais',
+        'nb': 'norsk',
+        'nl': 'nederlands',
+        'pl': 'polski',
+        'pt': 'portugues',
+        'sv': 'svenska',
+    }
+
+    base_lang = sxng_locale.split('-')[0]
+    lui = lang_map.get(base_lang, 'english')
+
+    url_params = {
+        'q': query,
+        'format': 'opensearch',
+        'segment': 'startpage.defaultffx',
+        'lui': lui,
+    }
+    url = f'https://www.startpage.com/suggestions?{urlencode(url_params)}'
+
+    # Needs user agent, returns a 204 otherwise
+    h = {'User-Agent': gen_useragent()}
+
+    resp = get(url, headers=h)
+    results: list[str] = []
+
+    if resp.ok:
+        try:
+            data = resp.json()
+            if len(data) >= 2 and isinstance(data[1], list):
+                results = data[1]
+        except json.JSONDecodeError:
+            pass
+
+    return results
+
+
+def swisscows(query: str, _sxng_locale: str) -> list[str]:
     # swisscows autocompleter
     url = 'https://swisscows.ch/api/suggest?{query}&itemsCount=5'
+    results: list[str] = json.loads(get(url.format(query=urlencode({'query': query}))).text)
+    return results
 
-    resp = json.loads(get(url.format(query=urlencode({'query': query}))).text)
-    return resp
 
-
-def qwant(query, sxng_locale):
+def qwant(query: str, sxng_locale: str) -> list[str]:
     """Autocomplete from Qwant. Supports Qwant's regions."""
-    results = []
-
     locale = engines['qwant'].traits.get_region(sxng_locale, 'en_US')
     url = 'https://api.qwant.com/v3/suggest?{query}'
     resp = get(url.format(query=urlencode({'q': query, 'locale': locale, 'version': '2'})))
+    results: list[str] = []
 
     if resp.ok:
         data = resp.json()
@@ -199,14 +351,12 @@ def qwant(query, sxng_locale):
     return results
 
 
-def wikipedia(query, sxng_locale):
+def wikipedia(query: str, sxng_locale: str) -> list[str]:
     """Autocomplete from Wikipedia. Supports Wikipedia's languages (aka netloc)."""
-    results = []
     eng_traits = engines['wikipedia'].traits
     wiki_lang = eng_traits.get_language(sxng_locale, 'en')
-    wiki_netloc = eng_traits.custom['wiki_netloc'].get(wiki_lang, 'en.wikipedia.org')
+    wiki_netloc: str = eng_traits.custom['wiki_netloc'].get(wiki_lang, 'en.wikipedia.org')  # type: ignore
 
-    url = 'https://{wiki_netloc}/w/api.php?{args}'
     args = urlencode(
         {
             'action': 'opensearch',
@@ -217,7 +367,9 @@ def wikipedia(query, sxng_locale):
             'limit': '10',
         }
     )
-    resp = get(url.format(args=args, wiki_netloc=wiki_netloc))
+    resp = get(f'https://{wiki_netloc}/w/api.php?{args}')
+    results: list[str] = []
+
     if resp.ok:
         data = resp.json()
         if len(data) > 1:
@@ -226,37 +378,45 @@ def wikipedia(query, sxng_locale):
     return results
 
 
-def yandex(query, _lang):
+def yandex(query: str, _sxng_locale: str) -> list[str]:
     # yandex autocompleter
     url = "https://suggest.yandex.com/suggest-ff.cgi?{0}"
-
     resp = json.loads(get(url.format(urlencode(dict(part=query)))).text)
+    results: list[str] = []
+
     if len(resp) > 1:
-        return resp[1]
-    return []
+        results = resp[1]
+    return results
 
 
-backends = {
+backends: dict[str, t.Callable[[str, str], list[str]]] = {
+    '360search': qihu360search,
+    'baidu': baidu,
+    'bing': bing,
+    'brave': brave,
     'dbpedia': dbpedia,
     'duckduckgo': duckduckgo,
     'google': google_complete,
+    'kagi': kagi,
     'mwmbl': mwmbl,
-    'seznam': seznam,
-    'startpage': startpage,
-    'stract': stract,
-    'swisscows': swisscows,
+    'naver': naver,
+    'privacywall': privacywall,
+    'quark': quark,
     'qwant': qwant,
+    'seznam': seznam,
+    'sogou': sogou,
+    'startpage': startpage,
+    'swisscows': swisscows,
     'wikipedia': wikipedia,
-    'brave': brave,
     'yandex': yandex,
 }
 
 
-def search_autocomplete(backend_name, query, sxng_locale):
+def search_autocomplete(backend_name: str, query: str, sxng_locale: str) -> list[str]:
     backend = backends.get(backend_name)
     if backend is None:
         return []
     try:
         return backend(query, sxng_locale)
-    except (HTTPError, SearxEngineResponseException):
+    except (RequestException, SearxEngineResponseException):
         return []

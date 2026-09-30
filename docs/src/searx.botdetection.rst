@@ -4,11 +4,6 @@
 Bot Detection
 =============
 
-.. contents::
-   :depth: 2
-   :local:
-   :backlinks: entry
-
 .. automodule:: searx.botdetection
   :members:
 
@@ -51,6 +46,9 @@ Probe HTTP headers
   :members:
 
 .. automodule:: searx.botdetection.http_user_agent
+  :members:
+
+.. automodule:: searx.botdetection.http_sec_fetch
   :members:
 
 .. _botdetection config:
